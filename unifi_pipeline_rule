@@ -1,0 +1,8 @@
+rule "Parse UniFi Security Logs"
+when
+    has_field("message")
+then
+    let parsed = grok("%{IPV4:src_ip} was blocked from accessing %{IPV4:dst_ip} by %{DATA:block_reason}", to_string($message.message));
+    
+    set_fields(parsed);
+end
