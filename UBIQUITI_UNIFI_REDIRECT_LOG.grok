@@ -1,0 +1,7 @@
+rule "Parse Unifi Redirect Firewall Log"
+when
+    has_field("message")
+then
+    let parsed = grok("<%{NONNEGINT:syslog_priority}>%{SYSLOGTIMESTAMP:timestamp} %{HOSTNAME:hostname} \\[%{DATA:rule_name}\\] DESCR=\"%{DATA:description}\" IN=%{DATA:in_interface} OUT=%{DATA:out_interface} MAC=%{DATA:mac_addresses} SRC=%{IPV4:src_ip} DST=%{IPV4:dst_ip} LEN=%{INT:length} TOS=%{DATA:tos} PREC=0x%{BASE16NUM:precedence} TTL=%{INT:ttl} ID=%{INT:packet_id} PROTO=%{WORD:protocol} SPT=%{INT:src_port} DPT=%{INT:dst_port} SEQ=%{INT:sequence} ACK=%{INT:ack} WINDOW=%{INT:window} %{WORD:tcp_flags} URGP=%{INT:urgent_pointer} MARK=%{DATA:mark}", to_string($message.message));
+    set_fields(parsed);
+end
