@@ -15,3 +15,13 @@ In addition, the repository includes a specific Unifi CEF Parse Pipeline Rule as
 
 
 ![image](https://github.com/user-attachments/assets/8d4a8cb0-ab6f-47f5-8c1f-01a8e30cc990)
+
+
+## License
+
+Dual-licensed, **attribution required** under both:
+
+- **Code & configuration** (scripts, rules, decoders, pipelines, configs): [Apache License 2.0](LICENSE)
+- **Docs, guides & diagrams** (README, docs, diagrams): [CC BY 4.0](LICENSE-docs)
+
+See [`LICENSING.md`](LICENSING.md) and [`NOTICE`](NOTICE). Credit: Lester E. Nichols III, secdoc.tech.
