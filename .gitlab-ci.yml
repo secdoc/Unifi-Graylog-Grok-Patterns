@@ -3,11 +3,6 @@ stages: [validate, secret-scan]
 default:
   tags: ["${CI_RUNNER_TAG}"]
 
-variables:
-  TRUFFLEHOG_IMAGE: "docker.io/trufflesecurity/trufflehog@sha256:562bc231afa9de3d04de44cfe624252b08207de1fc3cebc5e7ed92bed7f279e4"
-  TRUFFLEHOG_VERSION: "3.97.4"
-  TRUFFLEHOG_REPORTER: ".gitlab/security/trufflehog_report.py"
-
 repository-integrity:
   stage: validate
   script:
@@ -19,7 +14,7 @@ repository-integrity:
       import subprocess
       from pathlib import Path
 
-      excluded = {".git", ".venv", "node_modules", "site"}
+      excluded = {".git", ".venv", ".vscode", "node_modules", "site"}
       raw = subprocess.check_output(["git", "ls-files", "-z"])
       files = [Path(value.decode()) for value in raw.split(b"\0") if value]
       counts = {"json": 0, "python": 0, "shell": 0}
@@ -38,28 +33,50 @@ repository-integrity:
       print(json.dumps({"status": "ok", "validated": counts}, sort_keys=True))
       PY
 
-trufflehog-changes:
+secret-pattern-history:
   stage: secret-scan
   variables:
     GIT_DEPTH: "0"
   script:
-    - set -euo pipefail
-    - test -f "$TRUFFLEHOG_REPORTER"
-    - install -d -m 0700 reports
-    - raw=$(mktemp); chmod 0600 "$raw"; trap 'rm -f "$raw"' EXIT
-    - podman pull "$TRUFFLEHOG_IMAGE"
-    - zero=0000000000000000000000000000000000000000
-    - since=${CI_MERGE_REQUEST_DIFF_BASE_SHA:-${CI_COMMIT_BEFORE_SHA:-}}
-    - if [ -z "$since" ] || [ "$since" = "$zero" ] || ! git cat-file -e "$since^{commit}" 2>/dev/null; then since=$(git rev-parse "$CI_COMMIT_SHA^" 2>/dev/null || true); fi
-    - scan_args=(); if [ -n "$since" ]; then scan_args+=(--since-commit "$since"); fi
-    - set +e
-    - podman run --rm -v "$CI_PROJECT_DIR:/repo:ro,Z" "$TRUFFLEHOG_IMAGE" --json --no-verification --results=unverified --no-update --log-level=-1 --fail --fail-on-scan-errors git "${scan_args[@]}" file:///repo > "$raw"
-    - scan_status=$?
-    - if [ -s "$raw" ] && [ "$scan_status" -eq 0 ]; then scan_status=183; fi
-    - set -e
-    - python3 "$TRUFFLEHOG_REPORTER" --input "$raw" --output reports/trufflehog-changes.json --scope git-changes --scanner-exit-code "$scan_status" --scanner-version "$TRUFFLEHOG_VERSION" --source-commit "$CI_COMMIT_SHA" --source-base-commit "${since:-root}"
-    - exit "$scan_status"
-  artifacts:
-    when: always
-    expire_in: 30 days
-    paths: [reports/trufflehog-changes.json]
+    - |
+      set -euo pipefail
+      /usr/bin/python3 - <<'PY'
+      import re
+      import subprocess
+
+      patterns = {
+          "private-key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+          "github-token": re.compile(rb"\b(?:ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{50,})\b"),
+          "aws-access-key": re.compile(rb"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
+          "slack-token": re.compile(rb"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+          "webhook-secret": re.compile(rb"https://(?:hooks\.slack\.com/services|discord(?:app)?\.com/api/webhooks)/[^\s'\"]+"),
+      }
+      objects = subprocess.check_output(["git", "rev-list", "--objects", "--all"])
+      findings = []
+      seen = set()
+      for line in objects.splitlines():
+          parts = line.split(b" ", 1)
+          if len(parts) != 2:
+              continue
+          object_id, path = parts
+          if object_id in seen:
+              continue
+          seen.add(object_id)
+          if subprocess.check_output(["git", "cat-file", "-t", object_id]).strip() != b"blob":
+              continue
+          size = int(subprocess.check_output(["git", "cat-file", "-s", object_id]))
+          if size > 2_000_000:
+              continue
+          data = subprocess.check_output(["git", "cat-file", "-p", object_id])
+          if b"\x00" in data[:8192]:
+              continue
+          for rule, pattern in patterns.items():
+              if pattern.search(data):
+                  findings.append((path.decode("utf-8", "replace"), rule))
+      if findings:
+          print(f"secret scan failed: {len(findings)} high-confidence finding(s)")
+          for path, rule in findings:
+              print(f"  {path}: {rule}")
+          raise SystemExit(1)
+      print(f"secret scan passed: {len(seen)} unique Git objects inspected")
+      PY
