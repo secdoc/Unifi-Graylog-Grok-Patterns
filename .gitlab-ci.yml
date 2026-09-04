@@ -1,5 +1,8 @@
 stages: [validate, secret-scan]
 
+default:
+  tags: ["${CI_RUNNER_TAG}"]
+
 variables:
   TRUFFLEHOG_IMAGE: "docker.io/trufflesecurity/trufflehog@sha256:562bc231afa9de3d04de44cfe624252b08207de1fc3cebc5e7ed92bed7f279e4"
   TRUFFLEHOG_VERSION: "3.97.4"
