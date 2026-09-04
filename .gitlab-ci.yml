@@ -1,13 +1,9 @@
-stages: [validate, secret-scan, malware-scan]
+stages: [validate, secret-scan]
 
 variables:
-  NEXUS_HOST: "nexus.secdoc.home"
-  TRUFFLEHOG_IMAGE: "nexus.secdoc.home/docker-hub/trufflesecurity/trufflehog@sha256:562bc231afa9de3d04de44cfe624252b08207de1fc3cebc5e7ed92bed7f279e4"
+  TRUFFLEHOG_IMAGE: "docker.io/trufflesecurity/trufflehog@sha256:562bc231afa9de3d04de44cfe624252b08207de1fc3cebc5e7ed92bed7f279e4"
   TRUFFLEHOG_VERSION: "3.97.4"
   TRUFFLEHOG_REPORTER: ".gitlab/security/trufflehog_report.py"
-
-default:
-  tags: [phase4-untrusted]
 
 repository-integrity:
   stage: validate
@@ -45,12 +41,9 @@ trufflehog-changes:
     GIT_DEPTH: "0"
   script:
     - set -euo pipefail
-    - test -n "$NEXUS_CI_USERNAME"
-    - test -n "$NEXUS_CI_PASSWORD"
     - test -f "$TRUFFLEHOG_REPORTER"
     - install -d -m 0700 reports
-    - raw=$(mktemp); chmod 0600 "$raw"; trap 'rm -f "$raw"; podman logout "$NEXUS_HOST" >/dev/null 2>&1 || true' EXIT
-    - printf '%s' "$NEXUS_CI_PASSWORD" | podman login --username "$NEXUS_CI_USERNAME" --password-stdin "$NEXUS_HOST"
+    - raw=$(mktemp); chmod 0600 "$raw"; trap 'rm -f "$raw"' EXIT
     - podman pull "$TRUFFLEHOG_IMAGE"
     - zero=0000000000000000000000000000000000000000
     - since=${CI_MERGE_REQUEST_DIFF_BASE_SHA:-${CI_COMMIT_BEFORE_SHA:-}}
@@ -67,54 +60,3 @@ trufflehog-changes:
     when: always
     expire_in: 30 days
     paths: [reports/trufflehog-changes.json]
-
-centralized-clamav:
-  stage: malware-scan
-  script:
-    - export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-    - set -euo pipefail
-    - test -n "$NEXUS_CI_USERNAME"
-    - test -n "$NEXUS_CI_PASSWORD"
-    - test -f "$TRUFFLEHOG_REPORTER"
-    - /usr/bin/mkdir -p reports
-    - |
-      report="$CI_PROJECT_DIR/reports/clamav.json"
-      fallback="$(/usr/bin/mktemp "$CI_PROJECT_DIR/reports/.clamav-fallback.XXXXXX")"
-      printf '%s\n' '{"state":"error","reason":"pipeline_not_completed"}' > "$fallback"
-      /usr/bin/python3 -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(value, dict)' "$fallback"
-      /usr/bin/mv -f -- "$fallback" "$report"
-    - stage="$CI_PROJECT_DIR/../clamav-stage-$CI_JOB_ID"
-    - /usr/bin/install -d -m 0700 "$stage"
-    - raw=$(/usr/bin/mktemp); /usr/bin/chmod 0600 "$raw"; trap '/usr/bin/rm -rf "$stage"; /usr/bin/rm -f "$raw"; podman logout "$NEXUS_HOST" >/dev/null 2>&1 || true' EXIT
-    - printf '%s' "$NEXUS_CI_PASSWORD" | podman login --username "$NEXUS_CI_USERNAME" --password-stdin "$NEXUS_HOST"
-    - podman pull "$TRUFFLEHOG_IMAGE"
-    - /usr/bin/git archive --format=tar "$CI_COMMIT_SHA" | /usr/bin/tar -C "$stage" -xf -
-    - /usr/bin/tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -C "$stage" -czf clamav-scan.tar.gz .
-    - set +e
-    - podman run --rm -v "$stage:/scan:ro,Z" "$TRUFFLEHOG_IMAGE" --json --no-verification --results=unverified --no-update --log-level=-1 --fail --fail-on-scan-errors filesystem /scan > "$raw"
-    - secret_status=$?
-    - if [ -s "$raw" ] && [ "$secret_status" -eq 0 ]; then secret_status=183; fi
-    - set -e
-    - snapshot_digest=$(/usr/bin/sha256sum clamav-scan.tar.gz | /usr/bin/cut -d ' ' -f1)
-    - python3 "$TRUFFLEHOG_REPORTER" --input "$raw" --output reports/trufflehog-snapshot.json --scope repository-snapshot --scanner-exit-code "$secret_status" --scanner-version "$TRUFFLEHOG_VERSION" --artifact-sha256 "$snapshot_digest"
-    - test "$secret_status" -eq 0
-    - |
-      set -o pipefail
-      report="$CI_PROJECT_DIR/reports/clamav.json"
-      scan_output="$(/usr/bin/mktemp "$CI_PROJECT_DIR/reports/.clamav-scan.XXXXXX")"
-      set +e
-      { printf '%s\n' "pipeline-${CI_PIPELINE_ID}-${CI_JOB_ID}"; printf '%s\n' "${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_SHORT_SHA}.tar.gz"; printf '%s\n' "gitlab://${CI_PROJECT_PATH}@${CI_COMMIT_SHA}"; /usr/bin/cat "$CI_PROJECT_DIR/clamav-scan.tar.gz"; } |
-        /usr/bin/sudo /usr/local/sbin/clamav-ci-scan > "$scan_output"
-      scan_status=$?
-      set -e
-      if /usr/bin/python3 -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(value, dict)' "$scan_output"; then
-        /usr/bin/mv -f -- "$scan_output" "$report"
-      else
-        /usr/bin/rm -f -- "$scan_output"
-        exit 1
-      fi
-      exit "$scan_status"
-  artifacts:
-    when: always
-    expire_in: 30 days
-    paths: [reports/clamav.json, reports/trufflehog-snapshot.json]

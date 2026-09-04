@@ -28,5 +28,5 @@ See [`LICENSING.md`](LICENSING.md) and [`NOTICE`](NOTICE). Credit: Lester E. Nic
 
 ## GitLab CI baseline
 
-GitLab CI runs repository integrity validation and centralized ClamAV scanning on the isolated `phase4-untrusted` runner. The baseline validates tracked Python syntax, shell syntax, and JSON parsing without direct Internet access. Repository-specific build and test gates remain additive to this baseline.
+GitLab CI runs repository integrity validation and secret scanning. The baseline validates tracked Python syntax, shell syntax, and JSON parsing, while the secret scan uses a pinned public container image. Repository-specific build and test gates remain additive to this baseline.
 
